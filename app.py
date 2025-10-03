@@ -170,27 +170,27 @@ def generate_question():
     if not api_key:
         return jsonify({'error': 'GROQ_API_KEY not configured on server. Cannot call model.'}), 500
 
-    # Build a prompt asking the model to produce JSON with question, choices, answer index
+    # USE YOUR EXACT WORKING PROMPT - DON'T CHANGE IT
     diff_hint = {
         'easy': 'Use simpler vocabulary, shorter sentences, and include an obvious clue in the passage-based question. Focus on basic comprehension and recognition.',
         'medium': 'Use age-appropriate vocabulary, modest multi-step reasoning, and plausible distractors.',
         'hard': 'Use more challenging reasoning, multi-step inference, and slightly denser language appropriate for upper-grade students.'
     }[difficulty]
 
-    # KEEP THE ORIGINAL PROMPT STRUCTURE THAT WORKS
+    # USE YOUR EXACT WORKING SYSTEM PROMPT
     system = (
         "You are an expert children's science educator and question-writer. Your job is to read a provided passage and create ONE detailed, scenario-based multiple-choice question (Brain Bee style) that tests comprehension and reasoning about the passage."
         " Use clear, kid-appropriate language, include a short context sentence that sets up a hypothetical scenario based on the passage, and then ask the question."
         " Provide exactly FOUR plausible answer choices where distractors are believable but only one choice is supported by the passage."
-        " IMPORTANT: When listing choices, DO NOT include prefix letters like 'A)', 'B)', 'a.', 'b.' etc. Just write the choice text itself."
         " STRICTLY reply with a single JSON object and nothing else. The JSON must include these keys:"
         " question: string (the full question including the scenario sentence),"
-        " choices: array of 4 strings (without any prefix letters),"
-        " answer: integer index (0-3) indicating the correct choice,"  # KEEP THIS AS INTEGER INDEX
+        " choices: array of 4 strings,"
+        " answer: integer index (0-3) indicating the correct choice,"
         " rationale: a short plain-language sentence (1-2 sentences) explaining why the correct answer is correct and why the others are not,"
         " source_span: optional short excerpt (up to 200 chars) copied verbatim from the provided passage that supports the correct answer."
     )
 
+    # USE YOUR EXACT WORKING USER PROMPT
     user = (
         "You will be given a passage delimited by triple backticks. BASE YOUR QUESTION ONLY ON THE INFORMATION IN THE PASSAGE. Do not add facts beyond it.\n\n""" )
     user += chunk + "\n```\n\nRespond with the JSON object described above. Do not include commentary, prefaces, or markdown — only the JSON object."
@@ -244,11 +244,10 @@ def generate_question():
     if not parsed:
         return jsonify({'error': 'Could not parse JSON from model output', 'raw': text}), 502
 
-    # Validate parsed structure - KEEP ORIGINAL VALIDATION
+    # USE YOUR EXACT WORKING VALIDATION
     q = parsed.get('question')
     choices = parsed.get('choices')
-    answer = parsed.get('answer')  # This should be integer index
-    
+    answer = parsed.get('answer')
     if not q or not isinstance(choices, list) or len(choices) != 4 or not isinstance(answer, int):
         return jsonify({'error': 'Model returned invalid structure', 'parsed': parsed}), 502
 
@@ -281,10 +280,10 @@ def generate_question():
         'source_span': parsed.get('source_span')
     }
 
-    # Evaluate question quality
+    # Evaluate question quality (this happens after we get valid data)
     quality_score, quality_feedback = evaluate_question_quality(question_data, chunk)
 
-    # Store in Supabase
+    # Store in Supabase (this happens after we get valid data)
     store_success = store_question_in_supabase(
         question_data, category, difficulty, quality_score, quality_feedback
     )
