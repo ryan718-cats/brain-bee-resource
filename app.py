@@ -53,7 +53,6 @@ def _read_random_chunk(filepath, size=10000):
     start = random.randint(0, max(0, len(text) - size))
     return text[start:start+size]
 
-
 @app.route('/api/generate-question', methods=['POST'])
 def generate_question():
     body = request.get_json() or {}
@@ -78,9 +77,6 @@ def generate_question():
         return jsonify({'error': 'GROQ_API_KEY not configured on server. Cannot call model.'}), 500
 
     # Build a prompt asking the model to produce JSON with question, choices, answer index
-    # Strong prompt: request a detailed, scenario-style question that tests comprehension of
-    # the passage. Ask for four plausible choices with one correct answer. Require JSON only.
-    # tailor prompt language based on difficulty
     diff_hint = {
         'easy': 'Use simpler vocabulary, shorter sentences, and include an obvious clue in the passage-based question. Focus on basic comprehension and recognition.',
         'medium': 'Use age-appropriate vocabulary, modest multi-step reasoning, and plausible distractors.',
@@ -90,12 +86,12 @@ def generate_question():
     system = (
         "You are an expert children's science educator and question-writer. Your job is to read a provided passage and create ONE detailed, scenario-based multiple-choice question (Brain Bee style) that tests comprehension and reasoning about the passage."
         " Use clear, kid-appropriate language, include a short context sentence that sets up a hypothetical scenario based on the passage, and then ask the question."
-        " Provide exactly FOUR plausible answer choices (labeled implicitly as an array) where distractors are believable but only one choice is supported by the passage."
-        " RANDOMLY DISTRIBUTE the correct answer across positions 0-3 (A-D) - do not favor any particular position."
+        " Provide exactly FOUR plausible answer choices where distractors are believable but only one choice is supported by the passage."
+        " IMPORTANT: When listing choices, DO NOT include prefix letters like 'A)', 'B)', 'a.', 'b.' etc. Just write the choice text itself."
         " STRICTLY reply with a single JSON object and nothing else. The JSON must include these keys:"
         " question: string (the full question including the scenario sentence),"
-        " choices: array of 4 strings,"
-        " answer: integer index (0-3) indicating the correct choice,"
+        " choices: array of 4 strings (without any prefix letters),"
+        " correct_answer: string (the exact text of the correct choice),"
         " rationale: a short plain-language sentence (1-2 sentences) explaining why the correct answer is correct and why the others are not,"
         " source_span: optional short excerpt (up to 200 chars) copied verbatim from the provided passage that supports the correct answer."
     )
@@ -106,16 +102,14 @@ def generate_question():
 
     # also append a short instruction about difficulty
     user += "\n\nDifficulty guidance: " + diff_hint
-    user += "\n\nIMPORTANT: Randomly vary which choice position (0-3) contains the correct answer. Do not favor position 1."
 
-    # Increase temperature for more variation and add random seed
     payload = {
         'model': model,
         'messages': [
             {'role': 'system', 'content': system},
             {'role': 'user', 'content': user}
         ],
-        'temperature': 0.7,  # Increased from 0.2 for more randomness
+        'temperature': 0.7,
         'max_tokens': 400,
     }
 
@@ -158,15 +152,61 @@ def generate_question():
     # Validate parsed structure
     q = parsed.get('question')
     choices = parsed.get('choices')
-    answer = parsed.get('answer')
-    if not q or not isinstance(choices, list) or len(choices) != 4 or not isinstance(answer, int):
+    correct_answer_text = parsed.get('correct_answer')
+    
+    if not q or not isinstance(choices, list) or len(choices) != 4 or not correct_answer_text:
         return jsonify({'error': 'Model returned invalid structure', 'parsed': parsed}), 502
 
-    # Return the structured question (keeping raw model text for debugging)
-    return jsonify({'question': q, 'choices': choices, 'answer': answer, 'rationale': parsed.get('rationale'), 'source_span': parsed.get('source_span'), 'raw_model': text})
+    # Clean choices - remove any prefix letters if the model still included them
+    cleaned_choices = []
+    for choice in choices:
+        # Remove common prefixes like "A)", "B.", "C) ", etc.
+        cleaned = choice.strip()
+        if len(cleaned) > 2 and cleaned[1] in [')', '.', ':']:
+            cleaned = cleaned[2:].strip()
+        elif len(cleaned) > 3 and cleaned[2] in [')', '.', ':']:
+            cleaned = cleaned[3:].strip()
+        cleaned_choices.append(cleaned)
+    
+    # Clean the correct_answer_text as well
+    cleaned_correct = correct_answer_text.strip()
+    if len(cleaned_correct) > 2 and cleaned_correct[1] in [')', '.', ':']:
+        cleaned_correct = cleaned_correct[2:].strip()
+    elif len(cleaned_correct) > 3 and cleaned_correct[2] in [')', '.', ':']:
+        cleaned_correct = cleaned_correct[3:].strip()
 
-# Note: /api/answer-question removed per request. The app keeps /api/check-answer for deterministic checking.
+    # Find the index of the correct answer in the cleaned choices
+    try:
+        correct_index = cleaned_choices.index(cleaned_correct)
+    except ValueError:
+        # If exact match fails, try case-insensitive match
+        correct_index = -1
+        for i, choice in enumerate(cleaned_choices):
+            if choice.lower() == cleaned_correct.lower():
+                correct_index = i
+                break
+        if correct_index == -1:
+            # Fallback: use first choice
+            correct_index = 0
 
+    # RANDOMIZE THE CHOICE ORDER IN PYTHON
+    indices = list(range(4))
+    random.shuffle(indices)
+    
+    shuffled_choices = [cleaned_choices[i] for i in indices]
+    
+    # Find the new position of the correct answer after shuffling
+    new_correct_index = indices.index(correct_index)
+
+    # Return the structured question with randomized choices
+    return jsonify({
+        'question': q, 
+        'choices': shuffled_choices, 
+        'answer': new_correct_index, 
+        'rationale': parsed.get('rationale'), 
+        'source_span': parsed.get('source_span'), 
+        'raw_model': text
+    })
 
 @app.route('/api/check-answer', methods=['POST'])
 def check_answer():
