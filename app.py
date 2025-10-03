@@ -4,6 +4,8 @@ import random
 import json
 import requests
 from dotenv import load_dotenv, find_dotenv
+from supabase import create_client, Client
+import openai
 
 # Load .env if present so GROQ_API_KEY or GROQ_DEFAULT_MODEL can be set
 env = find_dotenv()
@@ -11,6 +13,16 @@ if env:
     load_dotenv(env)
 
 app = Flask(__name__)
+
+# Initialize Supabase client
+supabase: Client = create_client(
+    os.getenv('SUPABASE_URL'),
+    os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+)
+
+# Initialize OpenAI for quality evaluation (using Groq as alternative)
+openai.api_key = os.getenv('GROQ_API_KEY')
+openai.api_base = "https://api.groq.com/openai/v1"
 
 @app.route('/')
 def home():
@@ -32,7 +44,6 @@ def review():
 def health():
     return jsonify({'service': 'Brain Bee', 'status': 'ok'})
 
-
 @app.route('/api/categories')
 def categories():
     data_dir = os.path.join(os.path.dirname(__file__), 'data')
@@ -43,7 +54,6 @@ def categories():
                 cats.append(fn[:-4])
     return jsonify({'categories': sorted(cats)})
 
-
 def _read_random_chunk(filepath, size=10000):
     # Read file bytes then pick a random window of approximately `size` chars
     with open(filepath, 'r', encoding='utf-8', errors='replace') as f:
@@ -52,6 +62,81 @@ def _read_random_chunk(filepath, size=10000):
         return text
     start = random.randint(0, max(0, len(text) - size))
     return text[start:start+size]
+
+def evaluate_question_quality(question_data, original_chunk):
+    """Evaluate the quality of the generated question using Groq"""
+    
+    evaluation_prompt = f"""
+    Evaluate this multiple-choice question for quality and educational value. Rate it on a scale of 1-10.
+    
+    ORIGINAL PASSAGE CONTEXT:
+    {original_chunk[:2000]}
+    
+    GENERATED QUESTION:
+    {question_data['question']}
+    
+    ANSWER CHOICES:
+    {chr(10).join([f"{i+1}. {choice}" for i, choice in enumerate(question_data['choices'])])}
+    
+    CORRECT ANSWER: Choice {question_data['answer'] + 1}
+    RATIONALE: {question_data.get('rationale', 'No rationale provided')}
+    
+    Evaluation Criteria:
+    1. Relevance to passage (1-3 points)
+    2. Clarity and specificity (1-3 points) 
+    3. Quality of distractors (1-2 points)
+    4. Appropriate difficulty (1-2 points)
+    
+    Respond with ONLY a JSON object in this format:
+    {{
+        "quality_score": <number 1-10>,
+        "quality_feedback": "<brief explanation of rating>"
+    }}
+    """
+    
+    try:
+        response = openai.ChatCompletion.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": "You are an expert educational content evaluator. Be strict but fair in your assessments."},
+                {"role": "user", "content": evaluation_prompt}
+            ],
+            temperature=0.1,
+            max_tokens=200
+        )
+        
+        eval_text = response.choices[0].message.content
+        # Parse JSON from response
+        start = eval_text.find('{')
+        end = eval_text.rfind('}')
+        if start != -1 and end != -1:
+            eval_data = json.loads(eval_text[start:end+1])
+            return eval_data.get('quality_score', 5), eval_data.get('quality_feedback', 'No feedback provided')
+    except Exception as e:
+        print(f"Quality evaluation failed: {e}")
+    
+    return 5, "Automatic evaluation failed"
+
+def store_question_in_supabase(question_data, category, difficulty, quality_score, quality_feedback):
+    """Store the question in Supabase database"""
+    try:
+        data = {
+            'category': category,
+            'question_text': question_data['question'],
+            'choices': question_data['choices'],
+            'correct_answer': question_data['answer'],
+            'difficulty': difficulty,
+            'quality_score': quality_score,
+            'quality_feedback': quality_feedback,
+            'rationale': question_data.get('rationale'),
+            'source_span': question_data.get('source_span')
+        }
+        
+        result = supabase.table('questions').insert(data).execute()
+        return True
+    except Exception as e:
+        print(f"Failed to store question in Supabase: {e}")
+        return False
 
 @app.route('/api/generate-question', methods=['POST'])
 def generate_question():
@@ -198,22 +283,39 @@ def generate_question():
     # Find the new position of the correct answer after shuffling
     new_correct_index = indices.index(correct_index)
 
-    # Return the structured question with randomized choices
+    # Prepare question data
+    question_data = {
+        'question': q,
+        'choices': shuffled_choices,
+        'answer': new_correct_index,
+        'rationale': parsed.get('rationale'),
+        'source_span': parsed.get('source_span')
+    }
+
+    # Evaluate question quality
+    quality_score, quality_feedback = evaluate_question_quality(question_data, chunk)
+
+    # Store in Supabase
+    store_success = store_question_in_supabase(
+        question_data, category, difficulty, quality_score, quality_feedback
+    )
+
+    # Return the structured question with quality info
     return jsonify({
         'question': q, 
         'choices': shuffled_choices, 
         'answer': new_correct_index, 
         'rationale': parsed.get('rationale'), 
         'source_span': parsed.get('source_span'), 
+        'quality_score': quality_score,
+        'quality_feedback': quality_feedback,
+        'stored_in_db': store_success,
         'raw_model': text
     })
 
 @app.route('/api/check-answer', methods=['POST'])
 def check_answer():
-    """Simple server-side check of a user's selected index against the expected answer.
-    Expects JSON: { question, choices, answer (expected index), selected (user index) }
-    Returns: { is_correct: bool, expected: int, selected: int, rationale?: str, source_span?: str }
-    """
+    """Simple server-side check of a user's selected index against the expected answer."""
     body = request.get_json() or {}
     expected = body.get('answer')
     selected = body.get('selected')
@@ -231,6 +333,34 @@ def check_answer():
 
     is_correct = (expected_i == selected_i)
     return jsonify({'is_correct': is_correct, 'expected': expected_i, 'selected': selected_i, 'rationale': rationale, 'source_span': source_span})
+
+# New endpoint to get question statistics
+@app.route('/api/question-stats', methods=['GET'])
+def question_stats():
+    """Get statistics about stored questions"""
+    try:
+        # Count questions by category and difficulty
+        result = supabase.table('questions').select('category, difficulty, quality_score').execute()
+        questions = result.data
+        
+        stats = {}
+        for q in questions:
+            cat = q['category']
+            if cat not in stats:
+                stats[cat] = {'total': 0, 'by_difficulty': {}, 'avg_quality': 0}
+            
+            stats[cat]['total'] += 1
+            stats[cat]['by_difficulty'][q['difficulty']] = stats[cat]['by_difficulty'].get(q['difficulty'], 0) + 1
+        
+        # Calculate average quality scores
+        for cat in stats:
+            cat_questions = [q for q in questions if q['category'] == cat and q['quality_score']]
+            if cat_questions:
+                stats[cat]['avg_quality'] = sum(q['quality_score'] for q in cat_questions) / len(cat_questions)
+        
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify({'error': f'Failed to get stats: {e}'}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=True)
