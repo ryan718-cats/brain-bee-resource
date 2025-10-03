@@ -1,0 +1,509 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Brain Bee Question Generator</title>
+    <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+      :root{--bg:#fff7f3;--card:#ffffff;--accent:#FF8A65;--muted:#5b6470}
+      body{font-family:'Baloo 2', 'Comic Sans MS', -apple-system, system-ui,Segoe UI,Roboto,Arial;margin:0;background:var(--bg);color:#0b1220}
+      .wrap{max-width:880px;margin:28px auto;padding:28px;background:var(--card);border-radius:12px;box-shadow:0 6px 24px rgba(10,30,80,0.06)}
+      h1{margin:0 0 8px;font-size:22px}
+      p.lead{margin:0 0 16px;color:var(--muted)}
+  .controls{display:flex;gap:12px;align-items:center;margin:12px 0}
+  select{padding:10px;border-radius:8px;border:1px solid rgba(0,0,0,0.06);font-family:inherit;background:#fff;min-width:260px}
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .chip{padding:8px 10px;border-radius:999px;background:#fff;border:1px solid rgba(0,0,0,0.06);cursor:pointer;font-size:13px}
+  .chip.active{background:linear-gradient(90deg,#4f46e5,#06b6d4);color:#fff;border-color:transparent}
+      button, .choice{font-family:inherit}
+      button.primary{padding:10px 14px;border-radius:10px;background:var(--accent);color:#fff;border:none;font-weight:700}
+      button.ghost{background:#fff;border:1px solid rgba(0,0,0,0.06);color:var(--muted);padding:10px 12px;border-radius:10px}
+  #q{margin-top:18px}
+  #question{font-weight:700;margin-bottom:12px;font-size:18px;position:relative;z-index:1000}
+      .choices{display:flex;flex-direction:row;gap:12px;flex-wrap:wrap}
+      .choice{padding:12px;border-radius:10px;border:1px solid rgba(0,0,0,0.06);background:#fff;display:flex;align-items:flex-start;gap:10px;align-items:center}
+      .result{margin-top:12px;padding:10px;border-radius:8px}
+      .result.correct{background:#e6f7ee;color:#064b23}
+      .result.wrong{background:#ffeef0;color:#5c0b18}
+      .meta{margin-top:10px;color:var(--muted);font-size:13px}
+      .small{font-size:12px;color:var(--muted)}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Brain Bee Question Generator</h1>
+      <p class="lead">Pick a category and generate a detailed, scenario-style question. Then choose an answer and submit to check.</p>
+
+      <div class="controls">
+        <label for="category">Category</label>
+        <select id="category"></select>
+        <button id="gen" class="primary">Generate Question</button>
+        <a href="/"><button class="ghost">Back to Home</button></a>
+      </div>
+  <div id="category_chips" class="chips" aria-hidden="false"></div>
+
+      <div id="q">
+        <div id="question" style="padding:18px;border-radius:8px;background:#f0f0f0;color:#8a8a8a;font-size:18px;min-height:84px;display:flex;align-items:center;justify-content:center">&nbsp;</div>
+  <div id="choices" class="choices" style="margin-top:12px;display:flex;flex-direction:column;gap:8px"></div>
+        <div style="margin-top:12px;display:flex;gap:8px;align-items:center">
+          <button id="submit" class="primary">Submit Answer</button>
+          <button id="reveal" class="ghost">Reveal Answer</button>
+        </div>
+        <div id="feedback" style="margin-top:12px"></div>
+      </div>
+
+      <div id="raw" class="small" style="margin-top:18px;display:none"></div>
+    </div>
+
+    <script>
+      // Global variables
+      let _selected = null;
+      let categoriesLoaded = false;
+
+      // Load categories from server and populate select
+      async function loadCategories(){
+        try{
+          const r = await fetch('/api/categories');
+          const j = await r.json();
+          const sel = document.getElementById('category');
+          sel.innerHTML = '';
+          j.categories.forEach(c => { 
+            const opt = document.createElement('option'); 
+            opt.value = c; 
+            opt.textContent = c; 
+            sel.appendChild(opt);
+          });
+          
+          // Set initial selection from localStorage or first option
+          const pref = localStorage.getItem('brainbee_pref_category');
+          if(pref && j.categories.includes(pref)) {
+            sel.value = pref;
+          } else if(sel.options.length > 0) {
+            sel.selectedIndex = 0;
+          }
+          
+          populateChips();
+          categoriesLoaded = true;
+        } catch(e){ 
+          console.error('Failed to load categories', e); 
+        }
+      }
+
+      // Populate category chips
+      function populateChips(){
+        if(!categoriesLoaded) return;
+        
+        const sel = document.getElementById('category');
+        const chips = document.getElementById('category_chips');
+        if(!sel || !chips) return;
+        
+        chips.innerHTML = '';
+        Array.from(sel.options).forEach(o => {
+          const c = document.createElement('div');
+          c.className = 'chip';
+          c.tabIndex = 0; // make focusable
+          c.role = 'button';
+          c.ariaLabel = 'Category ' + o.value;
+          c.textContent = o.value;
+          c.addEventListener('click', () => {
+            sel.value = o.value;
+            updateActiveChip(o.value);
+            localStorage.setItem('brainbee_pref_category', o.value);
+          });
+          c.addEventListener('keydown', (e)=>{
+            if(e.key === 'Enter' || e.key === ' ') { e.preventDefault(); c.click(); }
+            if(e.key === 'ArrowRight' || e.key === 'ArrowDown'){ e.preventDefault(); const next = c.nextElementSibling || chips.firstElementChild; if(next) next.focus(); }
+            if(e.key === 'ArrowLeft' || e.key === 'ArrowUp'){ e.preventDefault(); const prev = c.previousElementSibling || chips.lastElementChild; if(prev) prev.focus(); }
+            if(e.key === 'Home'){ e.preventDefault(); chips.firstElementChild && chips.firstElementChild.focus(); }
+            if(e.key === 'End'){ e.preventDefault(); chips.lastElementChild && chips.lastElementChild.focus(); }
+          });
+          chips.appendChild(c);
+        });
+        
+        // Set initial active chip
+        const currentValue = sel.value;
+        updateActiveChip(currentValue);
+      }
+
+      // Update active chip styling
+      function updateActiveChip(activeValue){
+        const chips = document.querySelectorAll('.chip');
+        chips.forEach(chip => {
+          chip.classList.toggle('active', chip.textContent === activeValue);
+        });
+      }
+
+      // Initialize categories on load
+      loadCategories();
+
+      // Update chips when select changes
+      document.getElementById('category')?.addEventListener('change', function() {
+        updateActiveChip(this.value);
+        localStorage.setItem('brainbee_pref_category', this.value);
+      });
+
+      const LABELS = ['A','B','C','D'];
+      
+      // Storage helpers
+      const STORAGE_KEY = 'brainbee_questions';
+      function getSavedQuestions(){
+        try{ return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }catch(e){ return [] }
+      }
+      
+      function saveQuestionToStorage(q){
+        try{
+          const arr = getSavedQuestions();
+          // ensure the question has an id
+          if(!q.id) q.id = Date.now() + Math.floor(Math.random()*1000);
+          const item = Object.assign({savedAt: Date.now()}, q);
+          arr.unshift(item);
+          if(arr.length>500) arr.length = 500;
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
+          // expose last saved id so the answer saver can reference it
+          window._lastQuestionSavedId = item.id;
+          return item.id;
+        }catch(e){ return null }
+      }
+
+      function renderChoices(choices){
+        const box = document.getElementById('choices'); 
+        box.innerHTML = '';
+        _selected = null;
+        
+        choices.forEach((c,i) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'choice';
+          btn.dataset.index = i;
+          btn.style.width = '100%';
+          btn.innerHTML = `<div style="display:flex;gap:12px;align-items:flex-start"><strong style="width:28px">${LABELS[i]}</strong><div style="flex:1">${c}</div></div>`;
+          btn.addEventListener('click', () => selectChoice(i));
+          box.appendChild(btn);
+        });
+        
+        const first = box.querySelector('button'); 
+        if(first) first.focus();
+      }
+
+      // Button click animation
+      document.addEventListener('click', function(e){
+        const t = e.target.closest('button'); 
+        if(!t) return;
+        t.style.transform = 'scale(0.98)';
+        setTimeout(() => { t.style.transform = ''; }, 120);
+      });
+
+      // keyboard navigation for choices (when choices exist)
+      document.addEventListener('keydown', (e) => {
+        // don't interfere with typing
+        const tag = document.activeElement && document.activeElement.tagName;
+        if(tag === 'INPUT' || tag === 'TEXTAREA') return;
+        // if choices present, allow ArrowUp/ArrowDown to move focus between them
+        const choiceButtons = Array.from(document.querySelectorAll('#choices .choice'));
+        if(choiceButtons && choiceButtons.length>0){
+          const active = document.activeElement && document.activeElement.classList && document.activeElement.classList.contains('choice');
+          if(e.key === 'ArrowDown' || e.key === 'ArrowRight'){
+            if(active){ const next = document.activeElement.nextElementSibling || choiceButtons[0]; if(next) next.focus(); e.preventDefault(); }
+          }
+          if(e.key === 'ArrowUp' || e.key === 'ArrowLeft'){
+            if(active){ const prev = document.activeElement.previousElementSibling || choiceButtons[choiceButtons.length-1]; if(prev) prev.focus(); e.preventDefault(); }
+          }
+          if(e.key === 'Enter' || e.key === ' '){
+            if(active){ e.preventDefault(); document.activeElement.click(); }
+          }
+        }
+      });
+
+      // Save answers
+      const ANSWER_KEY = 'brainbee_answers';
+      function saveAnswerRecord(rec){
+        try{
+          const arr = JSON.parse(localStorage.getItem(ANSWER_KEY) || '[]');
+          arr.unshift(Object.assign({ts:Date.now()}, rec));
+          if(arr.length>1000) arr.length = 1000;
+          localStorage.setItem(ANSWER_KEY, JSON.stringify(arr));
+        }catch(e){}
+      }
+
+      function disableChoices(disabled){
+        document.querySelectorAll('#choices .choice').forEach(b => {
+          b.disabled = disabled;
+          b.style.pointerEvents = disabled ? 'none' : '';
+          b.style.opacity = disabled ? '0.6' : '1';
+        });
+        const submitBtn = document.getElementById('submit'); 
+        if(submitBtn) submitBtn.disabled = disabled;
+        const revealBtn = document.getElementById('reveal'); 
+        if(revealBtn) revealBtn.disabled = disabled;
+      }
+
+      function selectChoice(i){
+        _selected = i;
+        document.querySelectorAll('#choices .choice').forEach(b => { 
+          b.style.borderColor = '#eef4ff'; 
+          b.style.background = '#fbfdff'; 
+        });
+        const btn = document.querySelector(`#choices .choice[data-index='${i}']`);
+        if(btn){ 
+          btn.style.borderColor = 'rgba(0,113,227,0.9)'; 
+          btn.style.background = '#eef8ff'; 
+        }
+      }
+
+      // Generate question
+      document.getElementById('gen').addEventListener('click', async () => {
+        const cat = document.getElementById('category').value;
+        const feedback = document.getElementById('feedback');
+        feedback.innerHTML = '';
+        feedback.className = '';
+        
+        if(!cat){ 
+          feedback.className = 'result wrong'; 
+          feedback.innerHTML = '<strong>Please pick a category first.</strong>'; 
+          return; 
+        }
+        
+        const difficulty = localStorage.getItem('brainbee_difficulty') || 'medium';
+        const genBtn = document.getElementById('gen');
+        genBtn.disabled = true; 
+        genBtn.textContent = 'Generating...';
+        
+        // Clear previous content
+        const qDiv = document.getElementById('question'); 
+        qDiv.textContent = ''; 
+        qDiv.style.background = '#f0f0f0';
+        document.getElementById('choices').innerHTML = '';
+        document.getElementById('raw').textContent = '';
+        feedback.innerHTML = '';
+        feedback.className = '';
+        
+        _selected = null;
+        disableChoices(true);
+        window._lastQuestion = null;
+        
+        try{
+          const r = await fetch('/api/generate-question', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({category: cat, difficulty})
+          });
+          
+          const j = await r.json();
+          
+          if(!r.ok){ 
+            document.getElementById('question').textContent = 'Error: ' + (j.error || r.statusText); 
+            document.getElementById('raw').textContent = j.raw || j.detail || ''; 
+            genBtn.disabled = false; 
+            genBtn.textContent = 'Generate Question'; 
+            return;
+          }
+          
+          document.getElementById('question').textContent = j.question;
+          renderChoices(j.choices);
+          window._lastQuestion = j;
+          document.getElementById('raw').textContent = j.raw_model ? j.raw_model.slice(0,800) : '';
+          disableChoices(false);
+          
+          // Save question to storage and capture its id
+          try{
+            const item = {
+              question: j.question,
+              choices: j.choices,
+              answer: j.answer,
+              rationale: j.rationale,
+              source_span: j.source_span,
+              category: cat
+            };
+            const savedId = saveQuestionToStorage(item);
+            // attach the id to the in-memory lastQuestion for later reference
+            if(savedId){
+              window._lastQuestion = Object.assign({id: savedId}, j);
+            }
+          } catch(e){}
+          
+          genBtn.disabled = false; 
+          genBtn.textContent = 'Generate Question';
+        } catch(e){ 
+          document.getElementById('question').textContent = 'Network error: ' + e.message;
+          genBtn.disabled = false; 
+          genBtn.textContent = 'Generate Question';
+        }
+      });
+
+      // Toast helper
+      function showToast(msg, type){ 
+        let t = document.getElementById('bb_toast'); 
+        if(!t){ 
+          t = document.createElement('div'); 
+          t.id = 'bb_toast'; 
+          t.style.position = 'fixed'; 
+          t.style.right = '18px'; 
+          t.style.bottom = '18px'; 
+          t.style.minWidth = '200px'; 
+          t.style.padding = '12px'; 
+          t.style.borderRadius = '8px'; 
+          t.style.background = '#111'; 
+          t.style.color = '#fff'; 
+          t.style.display = 'none'; 
+          t.style.boxShadow = '0 6px 18px rgba(0,0,0,0.2)'; 
+          t.style.zIndex = 9999; 
+          t.style.pointerEvents = 'none';
+          document.body.appendChild(t); 
+        }
+        
+        t.textContent = msg; 
+        t.style.background = type === 'error' ? '#b91c1c' : (type === 'ok' ? '#064e3b' : '#111'); 
+        t.style.display = 'block'; 
+        setTimeout(() => { t.style.display = 'none'; }, 2200);
+      }
+
+      // Submit answer
+      document.getElementById('submit').addEventListener('click', async () => {
+        const jq = window._lastQuestion;
+        if(!jq){ 
+          showToast('No question generated yet', 'error'); 
+          return; 
+        }
+        
+        if(_selected === null){ 
+          showToast('Please pick A, B, C or D.', 'error'); 
+          return; 
+        }
+        
+        const submitBtn = document.getElementById('submit'); 
+        submitBtn.disabled = true; 
+        submitBtn.textContent = 'Checking...';
+        
+        try{
+          const payload = { 
+            question: jq.question, 
+            choices: jq.choices, 
+            answer: jq.answer, 
+            selected: _selected, 
+            rationale: jq.rationale, 
+            source_span: jq.source_span 
+          };
+          
+          const r = await fetch('/api/check-answer', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload)
+          });
+          
+          const j = await r.json();
+          const div = document.getElementById('feedback');
+          
+          if(!r.ok){ 
+            div.textContent = 'Error: ' + (j.error || r.statusText); 
+            submitBtn.disabled = false; 
+            submitBtn.textContent = 'Submit Answer';
+            return; 
+          }
+          
+          div.className = 'result ' + (j.is_correct ? 'correct' : 'wrong');
+          div.innerHTML = (j.is_correct ? '<strong>Correct.</strong> ' : '<strong>Incorrect.</strong> ') + (j.rationale || '');
+          
+          if(j.source_span) {
+            div.innerHTML += '<div class="small">Source: <em>' + j.source_span + '</em></div>';
+          }
+          
+          submitBtn.disabled = false; 
+          submitBtn.textContent = 'Submit Answer';
+          
+          // Record answer (include question_id when available)
+          try{
+            const qid = window._lastQuestionSavedId || (window._lastQuestion && window._lastQuestion.id) || null;
+            saveAnswerRecord({
+              question_id: qid,
+              question: jq.question,
+              choices: jq.choices,
+              selected: _selected,
+              expected: j.expected,
+              is_correct: j.is_correct,
+              rationale: jq.rationale,
+              source_span: jq.source_span,
+              category: jq.category || ''
+            });
+          } catch(e){}
+          
+          if(j.is_correct){ 
+            disableChoices(true); 
+          }
+        } catch(e){ 
+          document.getElementById('feedback').textContent = 'Network error: ' + e.message;
+          submitBtn.disabled = false; 
+          submitBtn.textContent = 'Submit Answer';
+        }
+      });
+
+      // Reveal answer
+      document.getElementById('reveal').addEventListener('click', () => {
+        const jq = window._lastQuestion;
+        if(!jq){ 
+          showToast('No question generated yet', 'error'); 
+          return; 
+        }
+        
+        const correct = jq.answer;
+        const text = jq.choices[correct];
+        selectChoice(correct);
+        
+        const div = document.getElementById('feedback');
+        div.className = 'result';
+        div.innerHTML = '<strong>Answer:</strong> ' + LABELS[correct] + ' — ' + text + 
+                       '<div class="small">' + (jq.rationale || '') + '</div>';
+        disableChoices(true);
+      });
+
+      // Keyboard shortcuts
+      document.addEventListener('keydown', (e) => {
+        if(!window._lastQuestion) return;
+        const key = e.key;
+        
+        if(['1','2','3','4'].includes(key)){
+          const idx = parseInt(key) - 1; 
+          selectChoice(idx); 
+          e.preventDefault();
+        }
+        
+        const up = key.toUpperCase();
+        if(['A','B','C','D'].includes(up)){
+          const idx = ['A','B','C','D'].indexOf(up); 
+          selectChoice(idx); 
+          e.preventDefault();
+        }
+        
+        if(key === 'Enter'){
+          if(_selected !== null){ 
+            document.getElementById('submit').click(); 
+            e.preventDefault(); 
+          }
+        }
+      });
+
+      // UI debug overlay: append ?debug_ui=1 to the URL to enable
+      (function uiDebug(){
+        try{
+          const ps = new URLSearchParams(window.location.search);
+          if(ps.get('debug_ui') !== '1') return;
+          const inspectIds = ['category','category_chips','question'];
+          const info = [];
+          inspectIds.forEach(id=>{
+            const el = document.getElementById(id);
+            if(!el){ info.push(id+': MISSING'); return }
+            const cs = window.getComputedStyle(el);
+            const r = el.getBoundingClientRect();
+            info.push(id+':');
+            info.push('  z-index: '+cs.zIndex+'; position: '+cs.position+'; transform: '+cs.transform+'; overflow: '+cs.overflow+'; pointer-events: '+cs.pointerEvents+'; opacity: '+cs.opacity+'; display: '+cs.display);
+            info.push(`  rect: left=${Math.round(r.left)} top=${Math.round(r.top)} w=${Math.round(r.width)} h=${Math.round(r.height)} bottom=${Math.round(r.bottom)}`);
+          });
+          console.group('UI Debug'); console.log(info.join('\n')); console.groupEnd();
+          const o = document.createElement('pre'); o.id='ui_debug_overlay'; o.style.position='fixed'; o.style.left='12px'; o.style.top='12px'; o.style.zIndex = 999999; o.style.background='rgba(0,0,0,0.85)'; o.style.color='#fff'; o.style.padding='12px'; o.style.borderRadius='8px'; o.style.maxWidth='calc(100% - 24px)'; o.style.maxHeight='60vh'; o.style.overflow='auto'; o.style.fontSize='12px'; o.textContent = info.join('\n\n');
+          const btn = document.createElement('button'); btn.textContent = 'Close Debug'; btn.style.display='block'; btn.style.marginTop='8px'; btn.style.padding='6px 8px'; btn.style.borderRadius='6px'; btn.style.border='none'; btn.style.cursor='pointer'; btn.addEventListener('click', ()=>{ o.remove(); btn.remove(); });
+          document.body.appendChild(o); document.body.appendChild(btn);
+        }catch(e){ console.error('uiDebug failed', e); }
+      })();
+    </script>
+  </body>
+</html>

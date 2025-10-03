@@ -1,0 +1,101 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Brain Bee Learning Platform</title>
+    <style>
+      :root{--bg:#fff7f3;--card:#ffffff;--accent:#FF8A65;--muted:#5b6470}
+      body{font-family:'Baloo 2', 'Comic Sans MS', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;background:var(--bg);margin:0;padding:28px;color:#0b1220}
+      .wrap{max-width:960px;margin:0 auto}
+      header{display:flex;align-items:center;gap:16px}
+      h1{font-size:26px;margin:0}
+      p.sub{color:var(--muted);margin:4px 0 0}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px;margin-top:22px}
+      .card{background:var(--card);padding:20px;border-radius:12px;box-shadow:0 6px 18px rgba(15,25,40,0.06);display:flex;flex-direction:column}
+      .card h3{margin:6px 0}
+      .card p{color:var(--muted);flex:1}
+      .bigbtn{margin-top:auto;display:inline-block;padding:14px 12px;border-radius:10px;background:var(--accent);color:#fff;font-weight:600;font-size:16px;width:100%;cursor:pointer;border:none}
+      footer{margin-top:28px;color:var(--muted);font-size:13px}
+      @media(max-width:720px){.grid{grid-template-columns:1fr;}}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div>
+          <h1>Brain Bee Learning Platform</h1>
+          <p class="sub">Fun, friendly study tools for kids</p>
+        </div>
+      </header>
+
+      <div class="grid">
+        <div class="card">
+          <h3>Question Generator</h3>
+          <p>Generate scenario-style multiple-choice questions from category texts.</p>
+          <a href="/question-generator"><button class="bigbtn">Try Questions</button></a>
+        </div>
+
+        <div class="card">
+          <h3>Flashcards</h3>
+          <p>Review key facts with simple flashcards.</p>
+          <a href="/flashcards"><button class="bigbtn">Start Flashcards</button></a>
+        </div>
+
+        <!-- Review card removed per request -->
+      </div>
+
+
+      
+      <!-- difficulty selector moved below the card grid -->
+      <div style="max-width:960px;margin:18px auto;padding:12px;display:flex;align-items:center;gap:12px">
+        <div style="display:flex;flex-direction:column">
+          <div style="font-weight:600">Difficulty</div>
+          <div style="display:flex;gap:8px;margin-top:6px;align-items:center">
+            <button id="diffEasy" class="bigbtn" aria-label="easy" style="width:44px;padding:8px;border-radius:999px;background:#dbeafe;color:#0b1220">●</button>
+            <button id="diffMed" class="bigbtn" aria-label="medium" style="width:44px;padding:8px;border-radius:999px;background:#fde68a;color:#0b1220">●</button>
+            <button id="diffHard" class="bigbtn" aria-label="hard" style="width:44px;padding:8px;border-radius:999px;background:#fecaca;color:#0b1220">●</button>
+          </div>
+          <div id="diffLabel" style="font-size:13px;color:#374151;margin-top:8px">You currently selected: <strong>medium</strong></div>
+        </div>
+        <div style="color:#6b7280">Click a dot to set difficulty. This will guide how the questions are written.</div>
+      </div>
+
+      <div style="max-width:960px;margin:6px auto 18px;padding:12px;">
+        <div class="box" style="background:#fff;padding:18px;border-radius:10px;box-shadow:0 6px 18px rgba(15,25,40,0.06)">
+          <h3>About the Brain Bee Assistant</h3>
+          <p style="color:#374151">This assistant generates Brain Bee style, scenario-based multiple choice questions using curated science passages. It was built to help learners practice reasoning and comprehension in a friendly, kid-appropriate style.</p>
+          <p style="color:#374151">Categories correspond to topic files used by the Academic Team. The assistant is guided by those passages when creating questions — questions are based only on the selected passage. The difficulty you choose will guide the language and reasoning depth of the generated questions.</p>
+          <p style="color:#374151;font-weight:600">Training note:</p>
+          <p style="color:#374151">The question-generation prompts and examples were created from materials designed to mirror the types of content and question formats used by Brain Bee teams. This helps produce practice questions that match the style used by the Academic Team for competitions like the International Brain Bee.</p>
+        </div>
+      </div>
+
+      <script>
+        // difficulty stored as 'brainbee_difficulty' => 'easy'|'medium'|'hard'
+        const DIFF_KEY = 'brainbee_difficulty';
+        function setDiff(d){ localStorage.setItem(DIFF_KEY, d); highlight(); }
+        function getDiff(){ return localStorage.getItem(DIFF_KEY) || 'medium'; }
+        function highlight(){
+          const v = getDiff();
+          ['diffEasy','diffMed','diffHard'].forEach(id=>{ const el = document.getElementById(id); if(el){ el.style.transform = 'scale(1)'; el.style.boxShadow = ''; el.style.opacity = '0.6'; } });
+          const map = { 'easy':'diffEasy', 'medium':'diffMed', 'hard':'diffHard' };
+          const sel = map[v] || 'diffMed';
+          const el = document.getElementById(sel);
+          if(el){ el.style.transform = 'scale(1.15)'; el.style.boxShadow = '0 6px 18px rgba(79,70,229,0.18)'; el.style.opacity = '1'; }
+          const label = document.getElementById('diffLabel'); if(label) label.innerHTML = 'You currently selected: <strong>'+v+'</strong>';
+        }
+        document.getElementById('diffEasy').addEventListener('click', ()=>setDiff('easy'));
+        document.getElementById('diffMed').addEventListener('click', ()=>setDiff('medium'));
+        document.getElementById('diffHard').addEventListener('click', ()=>setDiff('hard'));
+        highlight();
+
+        // categories grid removed: generator will default to the first available category
+      </script>
+
+      <footer>
+        Built by Ryan Cho — please email cho6@sas.upenn.edu for questions.
+      </footer>
+    </div>
+  </body>
+</html>

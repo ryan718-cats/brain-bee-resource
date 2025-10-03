@@ -1,0 +1,239 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Flashcards</title>
+    <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+      body{font-family:'Baloo 2', 'Comic Sans MS', -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial;margin:0;padding:28px;background:#fff7f3;color:#0b1220}
+      .wrap{max-width:900px;margin:0 auto}
+      .toolbar{display:flex;gap:8px;align-items:center}
+  .card-outer{margin-top:18px;perspective:1200px}
+  /* larger card and allow content to scroll if long */
+  .card-inner{width:100%;min-height:260px;border-radius:12px;transform-style:preserve-3d;transition:transform 0.6s}
+  .card-face{position:relative;backface-visibility:hidden;padding:18px;border-radius:12px;box-shadow:0 6px 18px rgba(15,25,40,0.06);background:#fff;overflow:auto}
+      .card-back{position:absolute;top:0;left:0;right:0;bottom:0;transform:rotateY(180deg)}
+      .star{background:#fff;border-radius:8px;padding:8px;border:1px solid rgba(0,0,0,0.06)}
+      .bb-btn{padding:10px 12px;border-radius:10px;background:#4f46e5;color:#fff;border:none;font-weight:600;cursor:pointer}
+      .bb-btn.secondary{background:#f3f4f6;color:#0b1220}
+      .bb-select{padding:8px;border-radius:8px;border:1px solid rgba(0,0,0,0.08)}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h2>Flashcards</h2>
+      <div class="toolbar">
+        <div>
+          <label for="filterSelect">Show</label>
+          <select id="filterSelect" class="bb-select"><option value="all">All</option><option value="starred">Starred</option></select>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          <button id="prevBtn" class="bb-btn">Previous</button>
+          <button id="nextBtn" class="bb-btn">Next</button>
+          <a href="/"><button class="bb-btn secondary">Back to Home</button></a>
+        </div>
+      </div>
+
+      <div class="card-outer">
+        <div id="cardInner" class="card-inner">
+          <div id="cardFront" class="card-face">Front</div>
+          <div id="cardBack" class="card-face card-back">Back</div>
+        </div>
+      </div>
+      <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+        <button id="flipBtn" class="bb-btn secondary" style="padding:8px 10px">Flip</button>
+        <div style="font-size:12px;color:#666;align-self:center">(or press Space to flip)</div>
+  <div style="flex:1"></div>
+  <button id="starBtn" class="bb-btn">Star</button>
+  <button id="clearStarsBtn" class="bb-btn secondary" style="margin-left:8px;padding:8px 10px">Clear Stars</button>
+  <div id="starCount" class="small" style="margin-left:8px;color:#444;"></div>
+      </div>
+      <div id="progressWrap" style="margin-top:12px;">
+        <div id="progressBar" style="height:8px;background:#e6e6e6;border-radius:999px;overflow:hidden;">
+          <div id="progressFill" style="height:100%;width:0%;background:linear-gradient(90deg,#4f46e5,#06b6d4);"></div>
+        </div>
+        <div id="progressText" style="font-size:12px;margin-top:6px;color:#444;">0 / 0</div>
+      </div>
+    <script>
+      const STORAGE_KEY = 'brainbee_questions';
+      const STAR_KEY = 'brainbee_starred';
+
+      function loadSaved(){ try{ return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }catch(e){ return [] } }
+      function loadStarred(){ try{ return JSON.parse(localStorage.getItem(STAR_KEY) || '[]'); }catch(e){ return [] } }
+      function saveStarred(arr){ try{ localStorage.setItem(STAR_KEY, JSON.stringify(arr)); }catch(e){} }
+
+  let saved = loadSaved();
+  // ensure every saved item has an id (migrate older saves)
+  let migrated = false;
+  saved = saved.map(s=> {
+    if(s.id) return s;
+    migrated = true;
+    return Object.assign({id: Date.now()+Math.floor(Math.random()*1000)}, s);
+  });
+  if(migrated){ localStorage.setItem(STORAGE_KEY, JSON.stringify(saved)); }
+      // filtered view
+      let filtered = saved.slice();
+      let idx = 0;
+      let flipped = false;
+      const cardInner = document.getElementById('cardInner');
+      const cardFront = document.getElementById('cardFront');
+      const cardBack = document.getElementById('cardBack');
+      const starBtn = document.getElementById('starBtn');
+      const starCount = document.getElementById('starCount');
+
+      function applyFilter(){
+        saved = loadSaved();
+        const f = document.getElementById('filterSelect').value;
+        const starredIds = loadStarred();
+        if(f==='starred'){
+          filtered = saved.filter(s => starredIds.indexOf(s.id) !== -1);
+        } else {
+          filtered = saved.slice();
+        }
+        if(!filtered || filtered.length===0){ filtered = [{ id:null, question:'No cards to show', choices:[], answer:0, rationale:'' }]; }
+        idx = Math.min(idx, filtered.length-1);
+        render();
+      }
+
+      function render(){
+        const item = filtered[idx];
+        // front: question + compact choices
+        cardFront.innerHTML = '';
+        const qdiv = document.createElement('div');
+        qdiv.style.fontWeight = '700';
+        qdiv.style.marginBottom = '10px';
+        qdiv.textContent = item.question || item.q || 'No question';
+        cardFront.appendChild(qdiv);
+        const choices = item.choices || [];
+        if(choices && choices.length){
+          const list = document.createElement('div'); list.style.fontSize='14px';
+          choices.forEach((c,i)=>{
+            const row = document.createElement('div'); row.style.display='flex'; row.style.gap='10px'; row.style.marginBottom='6px';
+            const lbl = document.createElement('strong'); lbl.style.width='24px'; lbl.textContent = String.fromCharCode(65+i);
+            const txt = document.createElement('div'); txt.style.flex='1'; txt.textContent = c;
+            row.appendChild(lbl); row.appendChild(txt); list.appendChild(row);
+          });
+          cardFront.appendChild(list);
+        }
+
+        // back: show choices and highlight correct + rationale
+        cardBack.innerHTML = '';
+        if(choices && choices.length){
+          choices.forEach((c,i)=>{
+            const row = document.createElement('div'); row.style.display='flex'; row.style.gap='10px'; row.style.marginBottom='6px';
+            const lbl = document.createElement('strong'); lbl.style.width='24px'; lbl.textContent = String.fromCharCode(65+i);
+            const txt = document.createElement('div'); txt.style.flex='1'; if(typeof item.answer === 'number' && item.answer === i){ txt.style.color='#064b23'; txt.style.fontWeight='700'; }
+            txt.textContent = c;
+            row.appendChild(lbl); row.appendChild(txt); cardBack.appendChild(row);
+          });
+        }
+        // show user's previous attempt if available
+        try{
+          const answers = JSON.parse(localStorage.getItem('brainbee_answers') || '[]');
+          // Prefer matching by question_id if available, otherwise fall back to question text
+          let match = null;
+          if(item.id){
+            match = answers.find(a => a.question_id && a.question_id === item.id) || null;
+          }
+          if(!match){
+            match = answers.find(a => a.question && a.question === item.question) || null;
+          }
+          if(match){
+            const userRow = document.createElement('div'); userRow.style.marginTop = '8px';
+            const selectedIdx = typeof match.selected === 'number' ? match.selected : (typeof match.selected === 'string' ? parseInt(match.selected) : null);
+            const expectedIdx = typeof match.expected === 'number' ? match.expected : (typeof match.expected === 'string' ? parseInt(match.expected) : null);
+            const selLabel = (selectedIdx!==null && !isNaN(selectedIdx)) ? String.fromCharCode(65+selectedIdx) : null;
+            const expLabel = (expectedIdx!==null && !isNaN(expectedIdx)) ? String.fromCharCode(65+expectedIdx) : null;
+            if(selLabel){
+              const correct = (expectedIdx !== null && selectedIdx === expectedIdx);
+              const badge = document.createElement('div'); badge.style.fontSize='13px'; badge.style.marginBottom='6px';
+              badge.textContent = 'Your last answer: ' + selLabel + (correct ? ' — Correct' : (' — Incorrect' + (expLabel? (' (expected ' + expLabel + ')') : '')));
+              badge.style.color = correct ? '#064b23' : '#7f1d1d';
+              userRow.appendChild(badge);
+              // mark that we've shown an explanation so we don't duplicate the saved rationale below
+              let hasShownExplanation = false;
+              if(match.rationale){ const smallR = document.createElement('div'); smallR.style.fontSize='13px'; smallR.style.color='#374151'; smallR.textContent = 'Explanation: ' + match.rationale; userRow.appendChild(smallR); hasShownExplanation = true; }
+              cardBack.appendChild(userRow);
+              // store flag on the card back for later check when appending item.rationale
+              cardBack.dataset.hasExplanation = hasShownExplanation ? '1' : '0';
+            }
+          }
+        }catch(e){ /* ignore parse errors */ }
+        // Append the saved question rationale only if an explanation wasn't already shown from the user's previous attempt
+        try{
+          const already = cardBack.dataset.hasExplanation === '1';
+          if(item.rationale && !already){ const hr = document.createElement('hr'); hr.style.margin = '8px 0'; cardBack.appendChild(hr); const rdiv = document.createElement('div'); rdiv.textContent = item.rationale; cardBack.appendChild(rdiv); }
+        }catch(e){ /* ignore */ }
+        // flip state
+        cardInner.style.transform = flipped ? 'rotateY(180deg)' : '';
+        // update star
+        const starred = loadStarred();
+  const isStar = item.id && starred.indexOf(item.id)!==-1;
+  starBtn.innerHTML = (isStar? '★':'☆') + ' ' + (isStar? 'Unstar' : 'Star');
+  starCount.textContent = `${starred.length} starred`;
+  // make card color slightly different when starred
+  if(isStar){ cardFront.style.background = '#fff7f0'; cardBack.style.background = '#fff7f0'; starBtn.style.background = '#ffd6a5'; starBtn.style.color='#5b2100'; }
+  else { cardFront.style.background = '#fff'; cardBack.style.background = '#fff'; starBtn.style.background = '#4f46e5'; starBtn.style.color='#fff'; }
+  // disable star button for placeholder/no-id cards
+  starBtn.disabled = !item.id;
+        updateProgress();
+      }
+
+      document.getElementById('nextBtn').addEventListener('click', ()=>{ if(idx < filtered.length-1){ idx++; flipped=false; render(); }});
+      document.getElementById('prevBtn').addEventListener('click', ()=>{ if(idx>0){ idx--; flipped=false; render(); }});
+      document.getElementById('filterSelect').addEventListener('change', ()=>{ applyFilter(); });
+
+      // star toggle saves ids
+      starBtn.addEventListener('click', ()=>{
+        const item = filtered[idx];
+        if(!item || !item.id) return;
+        const starred = loadStarred();
+        const pos = starred.indexOf(item.id);
+        if(pos===-1) starred.push(item.id); else starred.splice(pos,1);
+        saveStarred(starred);
+        // also persist back to saved array (in case migration added ids)
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+        render();
+      });
+
+      // clear all starred ids
+      document.getElementById('clearStarsBtn').addEventListener('click', ()=>{
+        try{
+          saveStarred([]);
+          document.getElementById('starCount').textContent = '0 starred';
+          // re-render to update visuals
+          applyFilter();
+        }catch(e){ }
+      });
+
+      // flip button
+      document.getElementById('flipBtn').addEventListener('click', ()=>{ flipped = !flipped; render(); });
+
+      // make progress bar clickable to jump
+      document.getElementById('progressBar').addEventListener('click', (e)=>{
+        const rect = e.currentTarget.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const pct = x / rect.width;
+        const newIdx = Math.floor(pct * filtered.length);
+        if(newIdx >=0 && newIdx < filtered.length){ idx = newIdx; flipped=false; render(); }
+      });
+
+      // keyboard navigation and flip
+      document.addEventListener('keydown',(e)=>{
+        if(e.key==='ArrowRight'){ document.getElementById('nextBtn').click(); }
+        if(e.key==='ArrowLeft'){ document.getElementById('prevBtn').click(); }
+        if(e.key===' ' || e.key==='Enter'){ e.preventDefault(); flipped = !flipped; render(); }
+      });
+
+      function updateProgress(){
+        const total = filtered.length||0;
+        document.getElementById('progressText').innerText = (total? (idx+1)+' / '+total : '0 / 0');
+        const pct = total? Math.round(((idx+1)/total)*100):0;
+        document.getElementById('progressFill').style.width = pct+'%';
+      }
+
+      applyFilter();
+    </script>
+  </body>
+</html>

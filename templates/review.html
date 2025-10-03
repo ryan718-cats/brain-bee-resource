@@ -1,0 +1,104 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Review</title>
+    <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@400;700&display=swap" rel="stylesheet">
+    <style>body{font-family:'Baloo 2', 'Comic Sans MS', -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial;margin:0;padding:28px;background:#fff7f3;color:#0b1220}.wrap{max-width:900px;margin:0 auto}.box{background:#fff;padding:18px;border-radius:10px;box-shadow:0 6px 18px rgba(15,25,40,0.06)}button{padding:10px 12px;border-radius:8px;background:#FF8A65;color:#fff;border:none}</style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h2>Quick Review — Redo Past Questions</h2>
+      <div class="box">You'll be shown every question you've answered before. Try each once, then we'll show the correct answer and explanation and move on. Use 1-4 or A-D to pick, Enter to submit.</div>
+      <div style="margin-top:12px">
+        <div style="display:flex;gap:8px;align-items:center">
+          <div>
+            <button id="reloadHistory" class="bb-btn secondary">Reload History</button>
+          </div>
+          <div style="margin-left:auto">
+            <a href="/"><button style="background:#f3f4f6;color:#0b1220;margin-left:8px">Back to Home</button></a>
+          </div>
+        </div>
+
+        <div id="quizWrap" style="margin-top:12px">
+          <div id="qBox" class="box" style="margin-bottom:12px">
+            <div id="qText" style="font-weight:700">Loading...</div>
+            <div id="choices" style="margin-top:12px;display:flex;flex-direction:column;gap:8px"></div>
+            <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+              <button id="prevQ" class="bb-btn secondary">Previous</button>
+              <button id="nextQ" class="bb-btn">Next</button>
+              <div id="redoProgress" style="margin-left:auto;color:#444;font-size:13px">0 / 0</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <script>
+        const ANSWER_KEY = 'brainbee_answers';
+        function loadAnswers(){ try{ return JSON.parse(localStorage.getItem(ANSWER_KEY) || '[]'); }catch(e){ return [] } }
+
+  let hist = loadAnswers();
+        let redoIndex = 0;
+        const qText = document.getElementById('qText');
+        const choicesEl = document.getElementById('choices');
+        const progressEl = document.getElementById('redoProgress');
+
+        function renderRedo(){
+          hist = loadAnswers();
+          if(!hist || hist.length===0){ qText.textContent='No past answers yet.'; choicesEl.innerHTML=''; progressEl.textContent='0 / 0'; return }
+          if(redoIndex < 0) redoIndex = 0;
+          if(redoIndex >= hist.length){ qText.textContent='All done — you finished redoing past questions!'; choicesEl.innerHTML=''; progressEl.textContent=hist.length+' / '+hist.length; return }
+          const cur = hist[redoIndex];
+          qText.textContent = cur.question;
+          choicesEl.innerHTML = '';
+          cur.choices.forEach((c,ci)=>{
+            const b = document.createElement('button');
+            b.className = 'choice'; b.type='button'; b.style.textAlign='left'; b.style.padding='10px'; b.style.borderRadius='8px';
+            b.textContent = String.fromCharCode(65+ci)+'. '+c;
+            b.addEventListener('click', ()=>{ handleAttempt(ci); });
+            choicesEl.appendChild(b);
+          });
+          progressEl.textContent = (redoIndex+1)+' / '+hist.length;
+        }
+
+        function showToast(msg, type){ let t = document.getElementById('bb_toast'); if(!t){ t = document.createElement('div'); t.id='bb_toast'; t.style.position='fixed'; t.style.right='18px'; t.style.bottom='18px'; t.style.minWidth='200px'; t.style.padding='12px'; t.style.borderRadius='8px'; t.style.background='#111'; t.style.color='#fff'; t.style.display='none'; t.style.boxShadow='0 6px 18px rgba(0,0,0,0.2)'; t.style.zIndex=9999; document.body.appendChild(t); } t.textContent = msg; t.style.background = type==='error'? '#b91c1c' : (type==='ok'? '#064e3b' : '#111'); t.style.display = 'block'; setTimeout(()=>{ t.style.display = 'none'; }, 2200); }
+
+        async function handleAttempt(selected){
+          const cur = hist[redoIndex];
+          // disable choices early
+          Array.from(choicesEl.children).forEach((el)=>{ el.disabled = true; });
+          // ask server to check deterministically
+          try{
+            const payload = { question: cur.question, choices: cur.choices, answer: cur.expected, selected: selected, rationale: cur.rationale, source_span: cur.source_span };
+            const r = await fetch('/api/check-answer',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+            const j = await r.json();
+            if(!r.ok){ showToast('Error checking answer','error'); return }
+            // style buttons based on server response
+            Array.from(choicesEl.children).forEach((el,ci)=>{
+              if(ci === j.expected) el.style.background='linear-gradient(90deg,#c6f6d5,#e6f7ee)';
+              if(ci === j.selected && !j.is_correct) el.style.background='linear-gradient(90deg,#fee2e2,#fce7f3)';
+            });
+            const expl = document.createElement('div'); expl.style.marginTop='10px'; expl.style.padding='10px'; expl.style.borderRadius='8px'; expl.style.background='#fff'; expl.innerHTML = '<b>' + (j.is_correct? 'Correct.' : 'Answer:') + '</b> '+String.fromCharCode(65+j.expected)+'. '+(cur.choices[j.expected]||'')+'<br><br>'+(j.rationale || cur.rationale || 'No explanation provided.'); choicesEl.parentNode.appendChild(expl);
+          }catch(e){ showToast('Network error','error'); }
+        }
+
+        document.getElementById('nextQ').addEventListener('click', ()=>{ if(redoIndex < hist.length-1){ redoIndex++; renderRedo(); } });
+        document.getElementById('prevQ').addEventListener('click', ()=>{ if(redoIndex > 0){ redoIndex--; renderRedo(); } });
+
+  document.getElementById('reloadHistory').addEventListener('click', ()=>{ renderRedo(); });
+
+        // keyboard shortcuts map 1-4 and A-D; Enter submits if a choice is highlighted
+        document.addEventListener('keydown', (e)=>{
+          if(!hist || redoIndex >= hist.length) return;
+          const key = e.key;
+          if(['1','2','3','4'].includes(key)){
+            const idx = Number(key)-1; const child = choicesEl.children[idx]; if(child) child.click();
+          }
+          const up = key.toUpperCase(); if(['A','B','C','D'].includes(up)){ const idx = ['A','B','C','D'].indexOf(up); const child = choicesEl.children[idx]; if(child) child.click(); }
+        });
+
+        renderRedo();
+      </script>
+  </body>
+</html>
