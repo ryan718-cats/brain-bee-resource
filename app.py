@@ -5,7 +5,6 @@ import json
 import requests
 from dotenv import load_dotenv, find_dotenv
 from supabase import create_client, Client
-import openai
 
 # Load .env if present so GROQ_API_KEY or GROQ_DEFAULT_MODEL can be set
 env = find_dotenv()
@@ -19,10 +18,6 @@ supabase: Client = create_client(
     os.getenv('SUPABASE_URL'),
     os.getenv('SUPABASE_SERVICE_ROLE_KEY')
 )
-
-# Initialize OpenAI for quality evaluation (using Groq as alternative)
-openai.api_key = os.getenv('GROQ_API_KEY')
-openai.api_base = "https://api.groq.com/openai/v1"
 
 @app.route('/')
 def home():
@@ -44,6 +39,7 @@ def review():
 def health():
     return jsonify({'service': 'Brain Bee', 'status': 'ok'})
 
+
 @app.route('/api/categories')
 def categories():
     data_dir = os.path.join(os.path.dirname(__file__), 'data')
@@ -53,6 +49,7 @@ def categories():
             if fn.lower().endswith('.txt'):
                 cats.append(fn[:-4])
     return jsonify({'categories': sorted(cats)})
+
 
 def _read_random_chunk(filepath, size=10000):
     # Read file bytes then pick a random window of approximately `size` chars
@@ -95,23 +92,35 @@ def evaluate_question_quality(question_data, original_chunk):
     """
     
     try:
-        response = openai.ChatCompletion.create(
-            model="llama-3.1-8b-instant",
-            messages=[
+        # Use requests instead of openai library to avoid conflicts
+        api_key = os.getenv('GROQ_API_KEY')
+        headers = {
+            'Authorization': f'Bearer {api_key}',
+            'Content-Type': 'application/json'
+        }
+        
+        payload = {
+            'model': 'llama-3.1-8b-instant',
+            'messages': [
                 {"role": "system", "content": "You are an expert educational content evaluator. Be strict but fair in your assessments."},
                 {"role": "user", "content": evaluation_prompt}
             ],
-            temperature=0.1,
-            max_tokens=200
-        )
+            'temperature': 0.1,
+            'max_tokens': 200
+        }
         
-        eval_text = response.choices[0].message.content
-        # Parse JSON from response
-        start = eval_text.find('{')
-        end = eval_text.rfind('}')
-        if start != -1 and end != -1:
-            eval_data = json.loads(eval_text[start:end+1])
-            return eval_data.get('quality_score', 5), eval_data.get('quality_feedback', 'No feedback provided')
+        resp = requests.post('https://api.groq.com/openai/v1/chat/completions', json=payload, headers=headers, timeout=30)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            eval_text = data['choices'][0]['message']['content']
+            
+            # Parse JSON from response
+            start = eval_text.find('{')
+            end = eval_text.rfind('}')
+            if start != -1 and end != -1:
+                eval_data = json.loads(eval_text[start:end+1])
+                return eval_data.get('quality_score', 5), eval_data.get('quality_feedback', 'No feedback provided')
     except Exception as e:
         print(f"Quality evaluation failed: {e}")
     
@@ -124,7 +133,7 @@ def store_question_in_supabase(question_data, category, difficulty, quality_scor
             'category': category,
             'question_text': question_data['question'],
             'choices': question_data['choices'],
-            'correct_answer': question_data['answer'],
+            'correct_answer': question_data['answer'],  # This is the integer index
             'difficulty': difficulty,
             'quality_score': quality_score,
             'quality_feedback': quality_feedback,
@@ -168,6 +177,7 @@ def generate_question():
         'hard': 'Use more challenging reasoning, multi-step inference, and slightly denser language appropriate for upper-grade students.'
     }[difficulty]
 
+    # KEEP THE ORIGINAL PROMPT STRUCTURE THAT WORKS
     system = (
         "You are an expert children's science educator and question-writer. Your job is to read a provided passage and create ONE detailed, scenario-based multiple-choice question (Brain Bee style) that tests comprehension and reasoning about the passage."
         " Use clear, kid-appropriate language, include a short context sentence that sets up a hypothetical scenario based on the passage, and then ask the question."
@@ -176,7 +186,7 @@ def generate_question():
         " STRICTLY reply with a single JSON object and nothing else. The JSON must include these keys:"
         " question: string (the full question including the scenario sentence),"
         " choices: array of 4 strings (without any prefix letters),"
-        " correct_answer: string (the exact text of the correct choice),"
+        " answer: integer index (0-3) indicating the correct choice,"  # KEEP THIS AS INTEGER INDEX
         " rationale: a short plain-language sentence (1-2 sentences) explaining why the correct answer is correct and why the others are not,"
         " source_span: optional short excerpt (up to 200 chars) copied verbatim from the provided passage that supports the correct answer."
     )
@@ -234,12 +244,12 @@ def generate_question():
     if not parsed:
         return jsonify({'error': 'Could not parse JSON from model output', 'raw': text}), 502
 
-    # Validate parsed structure
+    # Validate parsed structure - KEEP ORIGINAL VALIDATION
     q = parsed.get('question')
     choices = parsed.get('choices')
-    correct_answer_text = parsed.get('correct_answer')
+    answer = parsed.get('answer')  # This should be integer index
     
-    if not q or not isinstance(choices, list) or len(choices) != 4 or not correct_answer_text:
+    if not q or not isinstance(choices, list) or len(choices) != 4 or not isinstance(answer, int):
         return jsonify({'error': 'Model returned invalid structure', 'parsed': parsed}), 502
 
     # Clean choices - remove any prefix letters if the model still included them
@@ -252,27 +262,6 @@ def generate_question():
         elif len(cleaned) > 3 and cleaned[2] in [')', '.', ':']:
             cleaned = cleaned[3:].strip()
         cleaned_choices.append(cleaned)
-    
-    # Clean the correct_answer_text as well
-    cleaned_correct = correct_answer_text.strip()
-    if len(cleaned_correct) > 2 and cleaned_correct[1] in [')', '.', ':']:
-        cleaned_correct = cleaned_correct[2:].strip()
-    elif len(cleaned_correct) > 3 and cleaned_correct[2] in [')', '.', ':']:
-        cleaned_correct = cleaned_correct[3:].strip()
-
-    # Find the index of the correct answer in the cleaned choices
-    try:
-        correct_index = cleaned_choices.index(cleaned_correct)
-    except ValueError:
-        # If exact match fails, try case-insensitive match
-        correct_index = -1
-        for i, choice in enumerate(cleaned_choices):
-            if choice.lower() == cleaned_correct.lower():
-                correct_index = i
-                break
-        if correct_index == -1:
-            # Fallback: use first choice
-            correct_index = 0
 
     # RANDOMIZE THE CHOICE ORDER IN PYTHON
     indices = list(range(4))
@@ -281,7 +270,7 @@ def generate_question():
     shuffled_choices = [cleaned_choices[i] for i in indices]
     
     # Find the new position of the correct answer after shuffling
-    new_correct_index = indices.index(correct_index)
+    new_correct_index = indices.index(answer)
 
     # Prepare question data
     question_data = {
