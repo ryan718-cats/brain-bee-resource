@@ -1,5 +1,5 @@
-from vercel_wsgi import make_handler
 from app import app
 
-# export handler for Vercel
-handler = make_handler(app)
+# Export the Flask app for Vercel
+# No need for vercel_wsgi or make_handler
+app = app
