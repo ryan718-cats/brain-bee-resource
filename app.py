@@ -91,6 +91,7 @@ def generate_question():
         "You are an expert children's science educator and question-writer. Your job is to read a provided passage and create ONE detailed, scenario-based multiple-choice question (Brain Bee style) that tests comprehension and reasoning about the passage."
         " Use clear, kid-appropriate language, include a short context sentence that sets up a hypothetical scenario based on the passage, and then ask the question."
         " Provide exactly FOUR plausible answer choices (labeled implicitly as an array) where distractors are believable but only one choice is supported by the passage."
+        " RANDOMLY DISTRIBUTE the correct answer across positions 0-3 (A-D) - do not favor any particular position."
         " STRICTLY reply with a single JSON object and nothing else. The JSON must include these keys:"
         " question: string (the full question including the scenario sentence),"
         " choices: array of 4 strings,"
@@ -105,14 +106,16 @@ def generate_question():
 
     # also append a short instruction about difficulty
     user += "\n\nDifficulty guidance: " + diff_hint
+    user += "\n\nIMPORTANT: Randomly vary which choice position (0-3) contains the correct answer. Do not favor position 1."
 
+    # Increase temperature for more variation and add random seed
     payload = {
         'model': model,
         'messages': [
             {'role': 'system', 'content': system},
             {'role': 'user', 'content': user}
         ],
-        'temperature': 0.2,
+        'temperature': 0.7,  # Increased from 0.2 for more randomness
         'max_tokens': 400,
     }
 
@@ -161,7 +164,6 @@ def generate_question():
 
     # Return the structured question (keeping raw model text for debugging)
     return jsonify({'question': q, 'choices': choices, 'answer': answer, 'rationale': parsed.get('rationale'), 'source_span': parsed.get('source_span'), 'raw_model': text})
-
 
 # Note: /api/answer-question removed per request. The app keeps /api/check-answer for deterministic checking.
 
